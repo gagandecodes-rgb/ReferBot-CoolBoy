@@ -1,38 +1,34 @@
 <?php
 /**
- * ✅ FULL SINGLE-FILE index.php (Telegram Bot + Website Verify in SAME file)
+ * ✅ SINGLE index.php (Telegram Bot + Website Verify in SAME file)
  *
- * FEATURES:
- * ✅ 3 refer = 1 coupon (referral adds +1 point per new user; 3 points = 500 by default via withdraw_points)
- * ✅ Coupon stock + mark used + withdrawals log
- * ✅ Admin panel: add coupon (500/1K/2K/4K) / stock / redeems log
- * ✅ Admin: change withdraw points (500/1K/2K/4K)
- * ✅ TOTAL 7 force-join channels (FORCE_JOIN_1..FORCE_JOIN_7)
- * ✅ Force-join checked ONLY when user clicks "✅ Check Verification"
- * ✅ AFTER join verified -> NEW message + Verification message
- * ✅ NO "Verify Yourself" button (removed)
- * ✅ Verification message has:
- *    - ✅ Verify Now (URL opens website verify page)
- *    - ✅ Check Verification (callback)
- * ✅ Website verify page:
- *    - shows UI first
- *    - user clicks ✅ Verify Now
- *    - verifies in DB (verify_token + expiry)
- *    - enforces "1 device token = 1 tg id" using device_links table
- *    - redirects back to Telegram bot
+ * ✅ BIG BOTTOM BUTTONS (Reply Keyboard) like your screenshot:
+ *    - User menu buttons: Stats / Withdraw / Referral Link (+ Admin Panel for admin)
+ *    - Admin menu buttons: Add Coupon / Stock / Redeems / Change Points / Back
  *
- * REQUIRED Render ENV:
+ * ✅ INLINE BUTTONS are still used where REQUIRED:
+ *    - Force join + Verify flow (URLs + callback_data)
+ *    - Withdraw amount options (callback_data)
+ *    - Admin amount pickers (callback_data)
+ *
+ * ✅ Force-Join channels supported: FORCE_JOIN_1 .. FORCE_JOIN_8
+ *    (If you set only 2, it will show only 2)
+ *
+ * ✅ Withdrawal options: 500 / 1K / 2K / 4K
+ * ✅ Each option uses dynamic points from withdraw_points table
+ * ✅ Admin can change points per option
+ * ✅ Admin can add coupons per amount (500/1K/2K/4K)
+ * ✅ Withdraw takes coupon from stock by amount
+ *
+ * REQUIRED ENV (Render):
  * BOT_TOKEN, ADMIN_ID, BOT_USERNAME (no @)
  * DB_HOST, DB_PORT(5432), DB_NAME(postgres), DB_USER, DB_PASS
- * FORCE_JOIN_1..FORCE_JOIN_2 (e.g. @channelname)
+ * FORCE_JOIN_1..FORCE_JOIN_8 (optional; set only what you want)
  *
- * REQUIRED DB (Supabase):
- * users(tg_id PK bigint, referred_by bigint, points int default 0, total_referrals int default 0,
- *       verified boolean default false, verified_at timestamptz, verify_token text, verify_token_expires timestamptz)
- * coupons(id bigserial, code text unique, amount int, used boolean default false, used_by bigint, used_at timestamptz, added_by bigint, created_at timestamptz default now())
- * withdrawals(id bigserial, tg_id bigint, coupon_code text, points_deducted int, created_at timestamptz default now())
- * device_links(device_token text PK, tg_id bigint UNIQUE, created_at timestamptz default now())
- * withdraw_points(amount int PK, points int)
+ * REQUIRED DB:
+ * - coupons must have: amount INT
+ * - withdraw_points table
+ * - device_links table
  */
 
 error_reporting(0);
@@ -42,10 +38,10 @@ define("VERIFY_TOKEN_MINUTES", 10);
 define("TG_CONNECT_TIMEOUT", 2);
 define("TG_TIMEOUT", 6);
 
-// ---------- ENV ----------
+/* ================= ENV ================= */
 $BOT_TOKEN    = getenv("BOT_TOKEN");
 $ADMIN_ID     = getenv("ADMIN_ID");
-$BOT_USERNAME = getenv("BOT_USERNAME"); // IMPORTANT (no @) for redirect
+$BOT_USERNAME = getenv("BOT_USERNAME"); // without @
 
 $DB_HOST = getenv("DB_HOST");
 $DB_PORT = getenv("DB_PORT") ?: "5432";
@@ -56,7 +52,7 @@ $DB_PASS = getenv("DB_PASS");
 if (!$BOT_TOKEN) { http_response_code(200); echo "OK"; exit; }
 $API = "https://api.telegram.org/bot{$BOT_TOKEN}";
 
-// ---------- DB CONNECT ----------
+/* ================= DB ================= */
 $pdo = null;
 try {
   $pdo = new PDO(
@@ -73,7 +69,7 @@ try {
 }
 function dbReady(){ global $pdo; return $pdo instanceof PDO; }
 
-// ---------- URL HELPERS ----------
+/* ================= URL HELPERS ================= */
 function baseUrlThisFile() {
   $proto = "https";
   if (!empty($_SERVER["HTTP_X_FORWARDED_PROTO"])) $proto = $_SERVER["HTTP_X_FORWARDED_PROTO"];
@@ -84,7 +80,7 @@ function baseUrlThisFile() {
   return $proto . "://" . $host . $path;
 }
 
-// ---------- TELEGRAM HELPERS ----------
+/* ================= TELEGRAM HELPERS ================= */
 function tg($method, $data = []) {
   global $API;
   $ch = curl_init();
@@ -118,16 +114,16 @@ function answerCallback($callback_id, $text = "", $alert = false) {
   ]);
 }
 
+function isAdmin($tg_id) {
+  global $ADMIN_ID;
+  return (string)$tg_id === (string)$ADMIN_ID;
+}
+
 function normalizeChannel($s) {
   $s = trim((string)$s);
   if ($s === "") return "";
   if ($s[0] !== "@") $s = "@".$s;
   return $s;
-}
-
-function isAdmin($tg_id) {
-  global $ADMIN_ID;
-  return (string)$tg_id === (string)$ADMIN_ID;
 }
 
 function botUsername() {
@@ -138,15 +134,20 @@ function botUsername() {
   return $me["result"]["username"] ?? "";
 }
 
-// ---------- CHANNELS (TOTAL 7) ----------
+/* ================= FORCE JOIN (UP TO 8) ================= */
 function channelsList() {
   return array_values(array_filter([
     normalizeChannel(getenv("FORCE_JOIN_1")),
     normalizeChannel(getenv("FORCE_JOIN_2")),
-    ]));
+    normalizeChannel(getenv("FORCE_JOIN_3")),
+    normalizeChannel(getenv("FORCE_JOIN_4")),
+    normalizeChannel(getenv("FORCE_JOIN_5")),
+    normalizeChannel(getenv("FORCE_JOIN_6")),
+    normalizeChannel(getenv("FORCE_JOIN_7")),
+    normalizeChannel(getenv("FORCE_JOIN_8")),
+  ]));
 }
 
-// ---------- UI ----------
 function joinMarkup() {
   $chs = channelsList();
   $rows = [];
@@ -162,6 +163,53 @@ function joinMarkup() {
   return ["inline_keyboard" => $rows];
 }
 
+function checkMember($user_id, $chat) {
+  $r = tg("getChatMember", ["chat_id" => $chat, "user_id" => $user_id]);
+  if (!$r || empty($r["ok"])) return false;
+  $status = $r["result"]["status"] ?? "";
+  return in_array($status, ["member", "administrator", "creator"], true);
+}
+
+function allJoined($tg_id) {
+  $chs = channelsList();
+  foreach ($chs as $ch) {
+    if (!$ch) continue;
+    if (!checkMember($tg_id, $ch)) return false;
+  }
+  return true;
+}
+
+/* ================= BIG BUTTONS (REPLY KEYBOARD) ================= */
+function userReplyKeyboard($isAdmin = false) {
+  $kb = [
+    "keyboard" => [
+      [ ["text"=>"📊 Stats"], ["text"=>"🎁 Withdraw"] ],
+      [ ["text"=>"🔗 My Referral Link"] ],
+    ],
+    "resize_keyboard" => true,
+    "is_persistent" => true,
+    "one_time_keyboard" => false
+  ];
+  if ($isAdmin) {
+    $kb["keyboard"][] = [ ["text"=>"🛠 Admin Panel"] ];
+  }
+  return $kb;
+}
+
+function adminReplyKeyboard() {
+  return [
+    "keyboard" => [
+      [ ["text"=>"➕ Add Coupon"], ["text"=>"📦 Coupon Stock"] ],
+      [ ["text"=>"🗂 Redeems Log"], ["text"=>"⚙ Change Withdraw Points"] ],
+      [ ["text"=>"⬅️ Back"] ],
+    ],
+    "resize_keyboard" => true,
+    "is_persistent" => true,
+    "one_time_keyboard" => false
+  ];
+}
+
+/* ================= INLINE MENUS ================= */
 function verifyMenuMarkup($verifyUrl) {
   return ["inline_keyboard" => [
     [[ "text" => "✅ Verify Now", "url" => $verifyUrl ]],
@@ -169,49 +217,7 @@ function verifyMenuMarkup($verifyUrl) {
   ]];
 }
 
-function mainMenuMarkup($admin = false) {
-  $rows = [
-    [
-      ["text" => "📊 Stats", "callback_data" => "stats"],
-      ["text" => "🎉 Withdraw", "callback_data" => "withdraw"]
-    ],
-    [
-      ["text" => "🔗 My Referral Link", "callback_data" => "reflink"]
-    ],
-  ];
-  if ($admin) $rows[] = [[ "text" => "🛠 Admin Panel", "callback_data" => "admin_panel" ]];
-  return ["inline_keyboard" => $rows];
-}
-
-function adminPanelMarkup() {
-  return ["inline_keyboard" => [
-    [
-      ["text" => "➕ Add Coupon", "callback_data" => "admin_add_coupon"],
-      ["text" => "📦 Coupon Stock", "callback_data" => "admin_stock"]
-    ],
-    [
-      ["text" => "🗂 Redeems Log", "callback_data" => "admin_redeems"]
-    ],
-    [
-      ["text" => "⚙ Change Withdraw Points", "callback_data" => "admin_points"]
-    ],
-    [
-      ["text" => "⬅️ Back", "callback_data" => "back_main"]
-    ]
-  ]];
-}
-
-function adminAmountOptionsKb($prefix, $backCb) {
-  return ["inline_keyboard" => [
-    [[ "text"=>"500", "callback_data"=>"{$prefix}_500" ]],
-    [[ "text"=>"1K",  "callback_data"=>"{$prefix}_1000" ]],
-    [[ "text"=>"2K",  "callback_data"=>"{$prefix}_2000" ]],
-    [[ "text"=>"4K",  "callback_data"=>"{$prefix}_4000" ]],
-    [[ "text"=>"⬅️ Back", "callback_data"=>$backCb ]]
-  ]];
-}
-
-// ---------- STATE ----------
+/* ================= STATE ================= */
 function stateDir() {
   $d = __DIR__ . "/state";
   if (!is_dir($d)) @mkdir($d, 0777, true);
@@ -227,7 +233,7 @@ function clearState($tg_id) {
   if (file_exists($f)) @unlink($f);
 }
 
-// ---------- DB HELPERS ----------
+/* ================= DB HELPERS ================= */
 function getUser($tg_id) {
   global $pdo;
   $st = $pdo->prepare("SELECT * FROM users WHERE tg_id=:tg LIMIT 1");
@@ -249,6 +255,16 @@ function isVerifiedUser($tg_id) {
   return $u && !empty($u["verified"]);
 }
 
+function getWithdrawPoints($amount) {
+  global $pdo;
+  try {
+    $st = $pdo->prepare("SELECT points FROM withdraw_points WHERE amount=:a");
+    $st->execute([":a" => (int)$amount]);
+    $r = $st->fetch();
+    return $r ? (int)$r["points"] : 0;
+  } catch (Exception $e) { return 0; }
+}
+
 function makeVerifyLink($tg_id) {
   global $pdo;
   $token = bin2hex(random_bytes(16));
@@ -262,75 +278,25 @@ function makeVerifyLink($tg_id) {
   return $base . "?mode=verify&uid=" . urlencode($tg_id) . "&token=" . urlencode($token);
 }
 
-function notifyAdminRedeem($tg_id, $coupon, $beforePoints, $afterPoints) {
-  global $ADMIN_ID;
-  $time = date("Y-m-d H:i:s");
-  $msg = "✅ <b>Coupon Redeemed</b>\n"
-       . "👤 User: <code>{$tg_id}</code>\n"
-       . "🎟 Code: <code>{$coupon}</code>\n"
-       . "🕒 Time: <code>{$time}</code>\n"
-       . "⭐ Points: <b>{$beforePoints}</b> → <b>{$afterPoints}</b>";
-  sendMessage($ADMIN_ID, $msg);
-}
-
-function getWithdrawPoints($amount) {
-  global $pdo;
-  // If table missing, default to 0 (won't allow withdraw)
-  try {
-    $st = $pdo->prepare("SELECT points FROM withdraw_points WHERE amount=:a");
-    $st->execute([":a" => (int)$amount]);
-    $r = $st->fetch();
-    return $r ? (int)$r["points"] : 0;
-  } catch (Exception $e) {
-    return 0;
-  }
-}
-
-// ---------- JOIN CHECK ----------
-function checkMember($user_id, $chat) {
-  $r = tg("getChatMember", ["chat_id" => $chat, "user_id" => $user_id]);
-  if (!$r || empty($r["ok"])) return false;
-  $status = $r["result"]["status"] ?? "";
-  return in_array($status, ["member", "administrator", "creator"], true);
-}
-
-function allJoined($tg_id) {
-  $chs = channelsList();
-  foreach ($chs as $ch) {
-    if (!$ch) continue;
-    if (!checkMember($tg_id, $ch)) return false;
-  }
-  return true;
-}
-
-// =======================================================
-// ================= WEBSITE VERIFY (GET) =================
-// =======================================================
+/* ================= WEBSITE VERIFY (GET) ================= */
 function htmlVerifyUI($title, $msg, $doUrl) {
   $btn = $doUrl ? '<a class="btn" href="'.htmlspecialchars($doUrl).'">✅ Verify Now</a>' : '';
   return '<!doctype html>
-<html>
-<head>
+<html><head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>'.htmlspecialchars($title).'</title>
 <style>
-  body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(#061020,#0b1220);font-family:system-ui;color:#fff;}
-  .card{width:min(560px,92vw);background:#0f1a2b;border-radius:22px;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,.45);}
-  .h{font-size:28px;font-weight:800;margin:0 0 10px}
+  body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#0b1220;font-family:system-ui;color:#fff;}
+  .card{width:min(560px,92vw);background:#111827;border-radius:18px;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,.45);}
+  .h{font-size:26px;font-weight:800;margin:0 0 10px}
   .p{opacity:.85;line-height:1.4;margin:0 0 16px;font-size:16px}
-  .btn{display:block;text-align:center;background:#2f6dff;color:#fff;padding:14px 16px;border-radius:14px;text-decoration:none;font-weight:800;font-size:18px}
-  .sub{margin-top:14px;opacity:.6}
+  .btn{display:block;text-align:center;background:#22c55e;color:#000;padding:14px 16px;border-radius:12px;text-decoration:none;font-weight:800;font-size:18px}
 </style>
-</head>
-<body>
-  <div class="card">
-    <div class="h">🔐 '.htmlspecialchars($title).'</div>
-    <div class="p">'.htmlspecialchars($msg).'</div>
-    '.$btn.'
-    <div class="sub">Ready.</div>
-  </div>
-</body>
-</html>';
+</head><body><div class="card">
+<div class="h">🔐 '.htmlspecialchars($title).'</div>
+<div class="p">'.htmlspecialchars($msg).'</div>
+'.$btn.'
+</div></body></html>';
 }
 
 if ($_SERVER["REQUEST_METHOD"] === "GET") {
@@ -345,17 +311,13 @@ if ($_SERVER["REQUEST_METHOD"] === "GET") {
 
   if (!$uid || !$token) { echo htmlVerifyUI("Invalid", "Invalid verification link.", null); exit; }
 
-  // Show UI first
   if ($step !== "do") {
     $doUrl = baseUrlThisFile()."?mode=verify&uid=".$uid."&token=".urlencode($token)."&step=do";
-    echo htmlVerifyUI("Verification", "Tap below to verify. This blocks fake referrals and keeps rewards fair.", $doUrl);
+    echo htmlVerifyUI("Verification", "Tap below to verify.", $doUrl);
     exit;
   }
 
-  // Step=do -> verify now
-  global $pdo;
-
-  // Device token cookie (1 device ≈ 1 TG ID)
+  // device token cookie
   $cookieName = "device_token";
   if (empty($_COOKIE[$cookieName]) || strlen($_COOKIE[$cookieName]) < 20) {
     $dt = bin2hex(random_bytes(16));
@@ -374,75 +336,79 @@ if ($_SERVER["REQUEST_METHOD"] === "GET") {
   $u = $st->fetch();
 
   if (!$u) { echo htmlVerifyUI("Error", "User not found.", null); exit; }
+
   if (!empty($u["verified"])) {
-    $bot = botUsername();
-    header("Location: https://t.me/".$bot);
-    exit;
-  }
-  if (($u["verify_token"] ?? "") !== $token) {
-    echo htmlVerifyUI("Invalid", "This verify link is not valid. Go back and press Check Verification again.", null);
-    exit;
-  }
-  $exp = $u["verify_token_expires"] ?? "";
-  if (!$exp || strtotime($exp) < time()) {
-    echo htmlVerifyUI("Expired", "Verify link expired. Go back and press Check Verification again.", null);
+    header("Location: https://t.me/".botUsername());
     exit;
   }
 
-  // Device lock: device_links(device_token) can belong to only one tg_id
+  if (($u["verify_token"] ?? "") !== $token) {
+    echo htmlVerifyUI("Invalid", "This link is invalid. Press Check Verification again.", null);
+    exit;
+  }
+
+  $exp = $u["verify_token_expires"] ?? "";
+  if (!$exp || strtotime($exp) < time()) {
+    echo htmlVerifyUI("Expired", "Link expired. Press Check Verification again.", null);
+    exit;
+  }
+
+  // device lock
   $st = $pdo->prepare("SELECT tg_id FROM device_links WHERE device_token=:dt LIMIT 1");
   $st->execute([":dt" => $deviceToken]);
   $existing = $st->fetch();
   if ($existing && (int)$existing["tg_id"] !== $uid) {
-    echo htmlVerifyUI("Blocked", "❌ This device is already registered with another Telegram ID.", null);
+    echo htmlVerifyUI("Blocked", "❌ This device is already linked to another Telegram ID.", null);
     exit;
   }
 
-  // Link device -> tg_id
+  // link device
   $pdo->prepare("INSERT INTO device_links (device_token, tg_id) VALUES (:dt,:tg)
                  ON CONFLICT (device_token) DO UPDATE SET tg_id=EXCLUDED.tg_id")
       ->execute([":dt" => $deviceToken, ":tg" => $uid]);
 
-  // Mark verified & clear token
+  // mark verified
   $pdo->prepare("UPDATE users
                  SET verified=true, verified_at=NOW(), verify_token=NULL, verify_token_expires=NULL
                  WHERE tg_id=:tg")
       ->execute([":tg" => $uid]);
 
-  // Redirect back to Telegram bot
-  $bot = botUsername();
-  header("Location: https://t.me/".$bot);
+  header("Location: https://t.me/".botUsername());
   exit;
 }
 
-// =======================================================
-// ================== WEBHOOK (POST) =====================
-// =======================================================
+/* ================= WEBHOOK (POST) ================= */
 $update = json_decode(file_get_contents("php://input"), true);
 if (!$update) { http_response_code(200); echo "OK"; exit; }
 
 if (!dbReady()) {
   if (isset($update["message"])) {
     $chat_id = $update["message"]["chat"]["id"];
-    sendMessage($chat_id, "⚠️ Server database not connected.\nCheck Render ENV DB_HOST/DB_USER/DB_PASS and redeploy.");
+    sendMessage($chat_id, "⚠️ Database not connected.\nCheck Render ENV DB_HOST/DB_USER/DB_PASS and redeploy.");
   }
   http_response_code(200); echo "OK"; exit;
 }
 
-// ---------- MESSAGES ----------
+/* ================= MESSAGE HANDLER ================= */
 if (isset($update["message"])) {
   $m = $update["message"];
   $chat_id = $m["chat"]["id"];
   $from_id = $m["from"]["id"];
   $text = trim($m["text"] ?? "");
 
-  // State: admin add coupons
-  $stState = getState($from_id);
-  if (isAdmin($from_id) && preg_match("/^await_coupon_(500|1000|2000|4000)$/", $stState, $mm) && $text !== "" && strpos($text, "/") !== 0) {
+  // create user if missing (no ref here)
+  upsertUser($from_id, null);
+
+  // ---- ADMIN STATES (text input) ----
+  $state = getState($from_id);
+
+  // Admin: waiting coupon codes for amount
+  if (isAdmin($from_id) && preg_match("/^await_coupon_(500|1000|2000|4000)$/", $state, $mm) && $text !== "" && strpos($text, "/") !== 0) {
     $amount = (int)$mm[1];
     $codes = preg_split("/\r\n|\n|\r|,|\s+/", $text);
     $codes = array_values(array_filter(array_map("trim", $codes)));
     $added = 0;
+
     foreach ($codes as $c) {
       if ($c === "") continue;
       try {
@@ -451,54 +417,54 @@ if (isset($update["message"])) {
         $added++;
       } catch (Exception $e) {}
     }
+
     clearState($from_id);
-    sendMessage($chat_id, "✅ Added <b>{$added}</b> coupon(s) for <b>{$amount}</b>.", adminPanelMarkup());
+    sendMessage($chat_id, "✅ Added <b>{$added}</b> coupon(s) for <b>{$amount}</b>.", adminReplyKeyboard());
     http_response_code(200); echo "OK"; exit;
   }
 
-  // State: admin set points
-  if (isAdmin($from_id) && preg_match("/^setp_(500|1000|2000|4000)$/", $stState, $mm) && $text !== "" && strpos($text, "/") !== 0) {
+  // Admin: waiting points number for amount
+  if (isAdmin($from_id) && preg_match("/^setp_(500|1000|2000|4000)$/", $state, $mm) && $text !== "" && strpos($text, "/") !== 0) {
     $amount = (int)$mm[1];
     $pts = (int)$text;
     if ($pts < 0) $pts = 0;
+
     $pdo->prepare("INSERT INTO withdraw_points (amount, points)
                    VALUES (:a,:p)
                    ON CONFLICT (amount) DO UPDATE SET points=EXCLUDED.points")
         ->execute([":a"=>$amount, ":p"=>$pts]);
+
     clearState($from_id);
-    sendMessage($chat_id, "✅ Points updated for <b>{$amount}</b> → <b>{$pts}</b> points.", adminPanelMarkup());
+    sendMessage($chat_id, "✅ Points updated for <b>{$amount}</b> → <b>{$pts}</b> points.", adminReplyKeyboard());
     http_response_code(200); echo "OK"; exit;
   }
 
-  // /start with referral
+  // ---- /start with referral ----
   if (strpos($text, "/start") === 0) {
     $parts = explode(" ", $text, 2);
     $ref = null;
     if (count($parts) === 2 && ctype_digit(trim($parts[1]))) $ref = (int)trim($parts[1]);
 
     $existing = getUser($from_id);
+
+    // If user is NEW, apply referral once
     if (!$existing) {
       $referred_by = null;
       if ($ref && $ref != $from_id) {
         $refUser = getUser($ref);
         if ($refUser) $referred_by = $ref;
       }
-
       upsertUser($from_id, $referred_by);
-
-      // Give referrer +1 point only once (new user)
       if ($referred_by) {
         try {
-          $pdo->prepare("UPDATE users SET points = points + 1, total_referrals = total_referrals + 1 WHERE tg_id=:r")
+          $pdo->prepare("UPDATE users SET points=points+1, total_referrals=total_referrals+1 WHERE tg_id=:r")
               ->execute([":r" => $referred_by]);
         } catch (Exception $e) {}
       }
-    } else {
-      upsertUser($from_id, null);
     }
 
     if (isVerifiedUser($from_id)) {
-      sendMessage($chat_id, "🎉 <b>WELCOME!</b>\nChoose an option:", mainMenuMarkup(isAdmin($from_id)));
+      sendMessage($chat_id, "🏠 <b>Main Menu</b>", userReplyKeyboard(isAdmin($from_id)));
     } else {
       sendMessage($chat_id, "✅ <b>Join all channels</b> then verify.\n\nAfter joining, press <b>Check Verification</b>.", joinMarkup());
     }
@@ -506,30 +472,128 @@ if (isset($update["message"])) {
     http_response_code(200); echo "OK"; exit;
   }
 
-  // Any other message
-  upsertUser($from_id, null);
-  if (isVerifiedUser($from_id)) {
-    sendMessage($chat_id, "🏠 Main Menu:", mainMenuMarkup(isAdmin($from_id)));
-  } else {
+  // ---- if not verified, always show join buttons ----
+  if (!isVerifiedUser($from_id)) {
     sendMessage($chat_id, "✅ Join all channels then verify.\nPress <b>Check Verification</b>.", joinMarkup());
+    http_response_code(200); echo "OK"; exit;
   }
 
+  // ================= USER REPLY BUTTONS =================
+  if ($text === "📊 Stats") {
+    $u = getUser($from_id);
+    sendMessage(
+      $chat_id,
+      "📊 <b>Your Stats</b>\n\n⭐ Points: <b>{$u['points']}</b>\n👥 Referrals: <b>{$u['total_referrals']}</b>",
+      userReplyKeyboard(isAdmin($from_id))
+    );
+    http_response_code(200); echo "OK"; exit;
+  }
+
+  if ($text === "🔗 My Referral Link") {
+    $bot = botUsername();
+    $link = $bot ? "https://t.me/{$bot}?start={$from_id}" : "Set BOT_USERNAME in ENV";
+    sendMessage($chat_id, "🔗 <b>Your Referral Link</b>\n\n<code>{$link}</code>", userReplyKeyboard(isAdmin($from_id)));
+    http_response_code(200); echo "OK"; exit;
+  }
+
+  if ($text === "🎁 Withdraw") {
+    $p500 = getWithdrawPoints(500);
+    $p1k  = getWithdrawPoints(1000);
+    $p2k  = getWithdrawPoints(2000);
+    $p4k  = getWithdrawPoints(4000);
+
+    sendMessage($chat_id, "🎁 <b>Choose withdraw option</b>", [
+      "inline_keyboard" => [
+        [[ "text" => "🎁 500 (need {$p500} pts)", "callback_data" => "wd_500" ]],
+        [[ "text" => "🎁 1K (need {$p1k} pts)",  "callback_data" => "wd_1000" ]],
+        [[ "text" => "🎁 2K (need {$p2k} pts)",  "callback_data" => "wd_2000" ]],
+        [[ "text" => "🎁 4K (need {$p4k} pts)",  "callback_data" => "wd_4000" ]],
+      ]
+    ]);
+    http_response_code(200); echo "OK"; exit;
+  }
+
+  // ================= ADMIN REPLY BUTTONS =================
+  if ($text === "🛠 Admin Panel") {
+    if (!isAdmin($from_id)) {
+      sendMessage($chat_id, "❌ Not allowed.", userReplyKeyboard(false));
+      http_response_code(200); echo "OK"; exit;
+    }
+    sendMessage($chat_id, "🛠 <b>Admin Panel</b>", adminReplyKeyboard());
+    http_response_code(200); echo "OK"; exit;
+  }
+
+  if (isAdmin($from_id)) {
+    if ($text === "⬅️ Back") {
+      sendMessage($chat_id, "🏠 <b>Main Menu</b>", userReplyKeyboard(true));
+      http_response_code(200); echo "OK"; exit;
+    }
+
+    if ($text === "➕ Add Coupon") {
+      sendMessage($chat_id, "➕ <b>Select coupon amount</b>", [
+        "inline_keyboard" => [
+          [[ "text"=>"500",  "callback_data"=>"admin_add_500" ]],
+          [[ "text"=>"1K",   "callback_data"=>"admin_add_1000" ]],
+          [[ "text"=>"2K",   "callback_data"=>"admin_add_2000" ]],
+          [[ "text"=>"4K",   "callback_data"=>"admin_add_4000" ]],
+        ]
+      ]);
+      http_response_code(200); echo "OK"; exit;
+    }
+
+    if ($text === "📦 Coupon Stock") {
+      $rows = $pdo->query("SELECT amount, COUNT(*) c FROM coupons WHERE used=false GROUP BY amount ORDER BY amount")->fetchAll();
+      $msg = "📦 <b>Coupon Stock</b>\n\n";
+      if (!$rows) $msg .= "No coupons available.";
+      else foreach ($rows as $r) $msg .= "🎁 <b>{$r['amount']}</b>: <b>{$r['c']}</b>\n";
+      sendMessage($chat_id, $msg, adminReplyKeyboard());
+      http_response_code(200); echo "OK"; exit;
+    }
+
+    if ($text === "🗂 Redeems Log") {
+      $rows = $pdo->query("SELECT tg_id, coupon_code, created_at, points_deducted FROM withdrawals ORDER BY id DESC LIMIT 15")->fetchAll();
+      $msg = "🗂 <b>Last 15 Redeems</b>\n\n";
+      if (!$rows) $msg .= "No redeems yet.";
+      else {
+        foreach ($rows as $r) {
+          $msg .= "👤 <code>{$r['tg_id']}</code>\n🎟 <code>{$r['coupon_code']}</code>\n⭐ <b>{$r['points_deducted']}</b>\n🕒 <code>{$r['created_at']}</code>\n\n";
+        }
+      }
+      sendMessage($chat_id, $msg, adminReplyKeyboard());
+      http_response_code(200); echo "OK"; exit;
+    }
+
+    if ($text === "⚙ Change Withdraw Points") {
+      sendMessage($chat_id, "⚙ <b>Select amount</b>", [
+        "inline_keyboard" => [
+          [[ "text"=>"500", "callback_data"=>"setp_500" ]],
+          [[ "text"=>"1K",  "callback_data"=>"setp_1000" ]],
+          [[ "text"=>"2K",  "callback_data"=>"setp_2000" ]],
+          [[ "text"=>"4K",  "callback_data"=>"setp_4000" ]],
+        ]
+      ]);
+      http_response_code(200); echo "OK"; exit;
+    }
+  }
+
+  // default
+  sendMessage($chat_id, "🏠 <b>Main Menu</b>", userReplyKeyboard(isAdmin($from_id)));
   http_response_code(200); echo "OK"; exit;
 }
 
-// ---------- CALLBACKS ----------
+/* ================= CALLBACK HANDLER ================= */
 if (isset($update["callback_query"])) {
   $cq = $update["callback_query"];
   $data = $cq["data"] ?? "";
   $from_id = $cq["from"]["id"];
   $chat_id = $cq["message"]["chat"]["id"];
 
-  // ACK fast
+  // ACK fast (prevents webhook timeout)
   answerCallback($cq["id"], "…");
 
   upsertUser($from_id, null);
 
-  // Check join -> NEW messages + verification menu
+  // ---- Force join check ----
   if ($data === "check_join") {
     if (allJoined($from_id)) {
       sendMessage($chat_id, "✅ <b>Channel join verified!</b>\nNow verify on website.");
@@ -541,16 +605,15 @@ if (isset($update["callback_query"])) {
         verifyMenuMarkup($url)
       );
     } else {
-      sendMessage($chat_id, "❌ <b>Verification failed.</b>\nJoin all channels then try again.", joinMarkup());
+      sendMessage($chat_id, "❌ <b>Join check failed.</b>\nJoin all channels then try again.", joinMarkup());
     }
-
     http_response_code(200); echo "OK"; exit;
   }
 
-  // Check verified after returning from website
+  // ---- Check verified ----
   if ($data === "check_verified") {
     if (isVerifiedUser($from_id)) {
-      sendMessage($chat_id, "✅ <b>Verified Successfully!</b>\nYou can now use the bot.", mainMenuMarkup(isAdmin($from_id)));
+      sendMessage($chat_id, "✅ <b>Verified Successfully!</b>", userReplyKeyboard(isAdmin($from_id)));
     } else {
       $url = makeVerifyLink($from_id);
       sendMessage(
@@ -559,93 +622,50 @@ if (isset($update["callback_query"])) {
         verifyMenuMarkup($url)
       );
     }
-
     http_response_code(200); echo "OK"; exit;
   }
 
-  // Block all other actions if not verified
+  // block if not verified
   if (!isVerifiedUser($from_id)) {
     sendMessage($chat_id, "🔐 Please verify first.\nJoin channels then press <b>Check Verification</b>.", joinMarkup());
     http_response_code(200); echo "OK"; exit;
   }
 
-  // STATS
-  if ($data === "stats") {
-    $u = getUser($from_id);
-    sendMessage(
-      $chat_id,
-      "📊 <b>Your Stats</b>\n\n"
-      . "⭐ Points: <b>{$u['points']}</b>\n"
-      . "👥 Referrals: <b>{$u['total_referrals']}</b>",
-      mainMenuMarkup(isAdmin($from_id))
-    );
-    http_response_code(200); echo "OK"; exit;
-  }
-
-  // REF LINK
-  if ($data === "reflink") {
-    $bot = botUsername();
-    $link = $bot ? "https://t.me/{$bot}?start={$from_id}" : "Set BOT_USERNAME in ENV";
-    sendMessage($chat_id, "🔗 <b>Your Referral Link</b>\n\n<code>{$link}</code>", mainMenuMarkup(isAdmin($from_id)));
-    http_response_code(200); echo "OK"; exit;
-  }
-
-  // WITHDRAW MENU (show points needed)
-  if ($data === "withdraw") {
-    $p500 = getWithdrawPoints(500);
-    $p1k  = getWithdrawPoints(1000);
-    $p2k  = getWithdrawPoints(2000);
-    $p4k  = getWithdrawPoints(4000);
-
-    $kb = ["inline_keyboard" => [
-      [[ "text" => "🎉 500 (need {$p500} pts)", "callback_data" => "wd_500" ]],
-      [[ "text" => "🎉 1K (need {$p1k} pts)",  "callback_data" => "wd_1000" ]],
-      [[ "text" => "🎉 2K (need {$p2k} pts)",  "callback_data" => "wd_2000" ]],
-      [[ "text" => "🎉 4K (need {$p4k} pts)",  "callback_data" => "wd_4000" ]],
-      [[ "text" => "⬅️ Back", "callback_data" => "back_main" ]]
-    ]];
-
-    sendMessage($chat_id, "🎉 <b>Choose withdraw option</b>", $kb);
-    http_response_code(200); echo "OK"; exit;
-  }
-
-  // WITHDRAW PROCESS
+  // ---- Withdraw process ----
   if (preg_match("/^wd_(500|1000|2000|4000)$/", $data, $m)) {
     $amount = (int)$m[1];
     $need = getWithdrawPoints($amount);
     $u = getUser($from_id);
 
     if ($need <= 0) {
-      sendMessage($chat_id, "⚠️ Withdraw points not set for {$amount}. Ask admin.", mainMenuMarkup(isAdmin($from_id)));
+      sendMessage($chat_id, "⚠️ Points not set for {$amount}. Ask admin.", userReplyKeyboard(isAdmin($from_id)));
       http_response_code(200); echo "OK"; exit;
     }
 
     if ((int)$u["points"] < $need) {
-      sendMessage($chat_id, "❌ Not enough points.\nYou have <b>{$u['points']}</b>, need <b>{$need}</b>.", mainMenuMarkup(isAdmin($from_id)));
+      sendMessage($chat_id, "❌ Not enough points.\nYou have <b>{$u['points']}</b>, need <b>{$need}</b>.", userReplyKeyboard(isAdmin($from_id)));
       http_response_code(200); echo "OK"; exit;
     }
 
     try {
       $pdo->beginTransaction();
 
+      // take coupon by amount
       $st = $pdo->prepare("SELECT id, code FROM coupons WHERE used=false AND amount=:amt ORDER BY id ASC LIMIT 1 FOR UPDATE SKIP LOCKED");
       $st->execute([":amt"=>$amount]);
       $coupon = $st->fetch();
 
       if (!$coupon) {
         $pdo->rollBack();
-        sendMessage($chat_id, "⚠️ Coupons out of stock for <b>{$amount}</b>. Try later.", mainMenuMarkup(isAdmin($from_id)));
+        sendMessage($chat_id, "⚠️ Out of stock for <b>{$amount}</b>. Try later.", userReplyKeyboard(isAdmin($from_id)));
         http_response_code(200); echo "OK"; exit;
       }
-
-      $before = (int)$u["points"];
-      $after  = $before - $need;
 
       $st = $pdo->prepare("UPDATE users SET points = points - :need WHERE tg_id=:tg AND points >= :need");
       $st->execute([":need" => $need, ":tg" => $from_id]);
       if ($st->rowCount() < 1) {
         $pdo->rollBack();
-        sendMessage($chat_id, "❌ Not enough points.", mainMenuMarkup(isAdmin($from_id)));
+        sendMessage($chat_id, "❌ Not enough points.", userReplyKeyboard(isAdmin($from_id)));
         http_response_code(200); echo "OK"; exit;
       }
 
@@ -657,86 +677,32 @@ if (isset($update["callback_query"])) {
 
       $pdo->commit();
 
-      sendMessage($chat_id, "🎉 <b>Coupon Redeemed!</b>\n\n<code>{$coupon['code']}</code>", mainMenuMarkup(isAdmin($from_id)));
-      notifyAdminRedeem($from_id, $coupon["code"], $before, $after);
-
+      sendMessage($chat_id, "🎉 <b>Coupon Redeemed!</b>\n\n<code>{$coupon['code']}</code>", userReplyKeyboard(isAdmin($from_id)));
       http_response_code(200); echo "OK"; exit;
 
     } catch (Exception $e) {
       if ($pdo && $pdo->inTransaction()) $pdo->rollBack();
-      sendMessage($chat_id, "⚠️ Error. Try again.", mainMenuMarkup(isAdmin($from_id)));
+      sendMessage($chat_id, "⚠️ Error. Try again.", userReplyKeyboard(isAdmin($from_id)));
       http_response_code(200); echo "OK"; exit;
     }
   }
 
-  // ADMIN PANEL
-  if ($data === "admin_panel") {
-    if (!isAdmin($from_id)) { sendMessage($chat_id, "❌ Not allowed."); http_response_code(200); echo "OK"; exit; }
-    sendMessage($chat_id, "🛠 <b>Admin Panel</b>", adminPanelMarkup());
-    http_response_code(200); echo "OK"; exit;
-  }
-
-  // ADMIN: ADD COUPON -> choose amount
-  if ($data === "admin_add_coupon") {
-    if (!isAdmin($from_id)) { sendMessage($chat_id, "❌ Not allowed."); http_response_code(200); echo "OK"; exit; }
-    sendMessage($chat_id, "➕ <b>Select coupon amount</b>", adminAmountOptionsKb("admin_add", "admin_panel"));
-    http_response_code(200); echo "OK"; exit;
-  }
-
+  // ---- Admin: pick coupon amount to add ----
   if (preg_match("/^admin_add_(500|1000|2000|4000)$/", $data, $m) && isAdmin($from_id)) {
     $amount = (int)$m[1];
     setState($from_id, "await_coupon_".$amount);
-    sendMessage($chat_id, "➕ Send coupon codes for <b>{$amount}</b>\n(Separate by newline / space / comma)");
+    sendMessage($chat_id, "➕ Send coupon codes for <b>{$amount}</b>\n(Separate by newline / space / comma)", adminReplyKeyboard());
     http_response_code(200); echo "OK"; exit;
   }
 
-  // ADMIN: STOCK
-  if ($data === "admin_stock") {
-    if (!isAdmin($from_id)) { sendMessage($chat_id, "❌ Not allowed."); http_response_code(200); echo "OK"; exit; }
-    $rows = $pdo->query("SELECT amount, COUNT(*) c FROM coupons WHERE used=false GROUP BY amount ORDER BY amount")->fetchAll();
-    $text = "📦 <b>Coupon Stock</b>\n\n";
-    if (!$rows) $text .= "No coupons available.";
-    else foreach ($rows as $r) $text .= "🎁 <b>{$r['amount']}</b>: <b>{$r['c']}</b>\n";
-    sendMessage($chat_id, $text, adminPanelMarkup());
-    http_response_code(200); echo "OK"; exit;
-  }
-
-  // ADMIN: REDEEMS LOG
-  if ($data === "admin_redeems") {
-    if (!isAdmin($from_id)) { sendMessage($chat_id, "❌ Not allowed."); http_response_code(200); echo "OK"; exit; }
-    $rows = $pdo->query("SELECT tg_id, coupon_code, created_at, points_deducted FROM withdrawals ORDER BY id DESC LIMIT 15")->fetchAll();
-    $text = "🗂 <b>Last 15 Redeems</b>\n\n";
-    if (!$rows) $text .= "No redeems yet.";
-    else {
-      foreach ($rows as $r) {
-        $text .= "👤 <code>{$r['tg_id']}</code>\n🎟 <code>{$r['coupon_code']}</code>\n⭐ <b>{$r['points_deducted']}</b>\n🕒 <code>{$r['created_at']}</code>\n\n";
-      }
-    }
-    sendMessage($chat_id, $text, adminPanelMarkup());
-    http_response_code(200); echo "OK"; exit;
-  }
-
-  // ADMIN: CHANGE POINTS
-  if ($data === "admin_points") {
-    if (!isAdmin($from_id)) { sendMessage($chat_id, "❌ Not allowed."); http_response_code(200); echo "OK"; exit; }
-    sendMessage($chat_id, "⚙ <b>Select amount to change points</b>", adminAmountOptionsKb("setp", "admin_panel"));
-    http_response_code(200); echo "OK"; exit;
-  }
-
+  // ---- Admin: pick amount to change points ----
   if (preg_match("/^setp_(500|1000|2000|4000)$/", $data, $m) && isAdmin($from_id)) {
     $amount = (int)$m[1];
     setState($from_id, "setp_".$amount);
-    sendMessage($chat_id, "✏️ Send new points for <b>{$amount}</b>:");
+    sendMessage($chat_id, "✏️ Send new points for <b>{$amount}</b>:", adminReplyKeyboard());
     http_response_code(200); echo "OK"; exit;
   }
 
-  if ($data === "back_main") {
-    sendMessage($chat_id, "🏠 Main Menu:", mainMenuMarkup(isAdmin($from_id)));
-    http_response_code(200); echo "OK"; exit;
-  }
-
-  // fallback
-  sendMessage($chat_id, "🏠 Main Menu:", mainMenuMarkup(isAdmin($from_id)));
   http_response_code(200); echo "OK"; exit;
 }
 
