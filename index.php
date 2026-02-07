@@ -173,7 +173,7 @@ function mainMenuMarkup($admin = false) {
   $rows = [
     [
       ["text" => "📊 Stats", "callback_data" => "stats"],
-      ["text" => "🎁 Withdraw", "callback_data" => "withdraw"]
+      ["text" => "🎉 Withdraw", "callback_data" => "withdraw"]
     ],
     [
       ["text" => "🔗 My Referral Link", "callback_data" => "reflink"]
@@ -598,14 +598,14 @@ if (isset($update["callback_query"])) {
     $p4k  = getWithdrawPoints(4000);
 
     $kb = ["inline_keyboard" => [
-      [[ "text" => "🎁 500 (need {$p500} pts)", "callback_data" => "wd_500" ]],
-      [[ "text" => "🎁 1K (need {$p1k} pts)",  "callback_data" => "wd_1000" ]],
-      [[ "text" => "🎁 2K (need {$p2k} pts)",  "callback_data" => "wd_2000" ]],
-      [[ "text" => "🎁 4K (need {$p4k} pts)",  "callback_data" => "wd_4000" ]],
+      [[ "text" => "🎉 500 (need {$p500} pts)", "callback_data" => "wd_500" ]],
+      [[ "text" => "🎉 1K (need {$p1k} pts)",  "callback_data" => "wd_1000" ]],
+      [[ "text" => "🎉 2K (need {$p2k} pts)",  "callback_data" => "wd_2000" ]],
+      [[ "text" => "🎉 4K (need {$p4k} pts)",  "callback_data" => "wd_4000" ]],
       [[ "text" => "⬅️ Back", "callback_data" => "back_main" ]]
     ]];
 
-    sendMessage($chat_id, "🎁 <b>Choose withdraw option</b>", $kb);
+    sendMessage($chat_id, "🎉 <b>Choose withdraw option</b>", $kb);
     http_response_code(200); echo "OK"; exit;
   }
 
