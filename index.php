@@ -24,7 +24,7 @@
  * REQUIRED Render ENV:
  * BOT_TOKEN, ADMIN_ID, BOT_USERNAME (no @)
  * DB_HOST, DB_PORT(5432), DB_NAME(postgres), DB_USER, DB_PASS
- * FORCE_JOIN_1..FORCE_JOIN_7 (e.g. @channelname)
+ * FORCE_JOIN_1..FORCE_JOIN_2 (e.g. @channelname)
  *
  * REQUIRED DB (Supabase):
  * users(tg_id PK bigint, referred_by bigint, points int default 0, total_referrals int default 0,
@@ -143,15 +143,7 @@ function channelsList() {
   return array_values(array_filter([
     normalizeChannel(getenv("FORCE_JOIN_1")),
     normalizeChannel(getenv("FORCE_JOIN_2")),
-    normalizeChannel(getenv("FORCE_JOIN_3")),
-    normalizeChannel(getenv("FORCE_JOIN_4")),
-    normalizeChannel(getenv("FORCE_JOIN_5")),
-    normalizeChannel(getenv("FORCE_JOIN_6")),
-    normalizeChannel(getenv("FORCE_JOIN_7")),
-    normalizeChannel(getenv("FORCE_JOIN_8")),
-    normalizeChannel(getenv("FORCE_JOIN_9")),
-    normalizeChannel(getenv("FORCE_JOIN_10")),
-  ]));
+    ]));
 }
 
 // ---------- UI ----------
