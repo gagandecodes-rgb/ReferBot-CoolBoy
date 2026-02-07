@@ -183,7 +183,7 @@ function allJoined($tg_id) {
 function userReplyKeyboard($isAdmin = false) {
   $kb = [
     "keyboard" => [
-      [ ["text"=>"📊 Stats"], ["text"=>"🎁 Withdraw"] ],
+      [ ["text"=>"📊 Stats"], ["text"=>"🎉 Withdraw"] ],
       [ ["text"=>"🔗 My Referral Link"] ],
     ],
     "resize_keyboard" => true,
@@ -496,18 +496,18 @@ if (isset($update["message"])) {
     http_response_code(200); echo "OK"; exit;
   }
 
-  if ($text === "🎁 Withdraw") {
+  if ($text === "🎉 Withdraw") {
     $p500 = getWithdrawPoints(500);
     $p1k  = getWithdrawPoints(1000);
     $p2k  = getWithdrawPoints(2000);
     $p4k  = getWithdrawPoints(4000);
 
-    sendMessage($chat_id, "🎁 <b>Choose withdraw option</b>", [
+    sendMessage($chat_id, "🎉 <b>Choose withdraw option</b>", [
       "inline_keyboard" => [
-        [[ "text" => "🎁 500 (need {$p500} pts)", "callback_data" => "wd_500" ]],
-        [[ "text" => "🎁 1K (need {$p1k} pts)",  "callback_data" => "wd_1000" ]],
-        [[ "text" => "🎁 2K (need {$p2k} pts)",  "callback_data" => "wd_2000" ]],
-        [[ "text" => "🎁 4K (need {$p4k} pts)",  "callback_data" => "wd_4000" ]],
+        [[ "text" => "🎉 500 (need {$p500} pts)", "callback_data" => "wd_500" ]],
+        [[ "text" => "🎉 1K (need {$p1k} pts)",  "callback_data" => "wd_1000" ]],
+        [[ "text" => "🎉 2K (need {$p2k} pts)",  "callback_data" => "wd_2000" ]],
+        [[ "text" => "🎉 4K (need {$p4k} pts)",  "callback_data" => "wd_4000" ]],
       ]
     ]);
     http_response_code(200); echo "OK"; exit;
@@ -545,7 +545,7 @@ if (isset($update["message"])) {
       $rows = $pdo->query("SELECT amount, COUNT(*) c FROM coupons WHERE used=false GROUP BY amount ORDER BY amount")->fetchAll();
       $msg = "📦 <b>Coupon Stock</b>\n\n";
       if (!$rows) $msg .= "No coupons available.";
-      else foreach ($rows as $r) $msg .= "🎁 <b>{$r['amount']}</b>: <b>{$r['c']}</b>\n";
+      else foreach ($rows as $r) $msg .= "🎉 <b>{$r['amount']}</b>: <b>{$r['c']}</b>\n";
       sendMessage($chat_id, $msg, adminReplyKeyboard());
       http_response_code(200); echo "OK"; exit;
     }
