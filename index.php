@@ -2,33 +2,16 @@
 /**
  * ✅ SINGLE index.php (Telegram Bot + Website Verify in SAME file)
  *
- * ✅ BIG BOTTOM BUTTONS (Reply Keyboard) like your screenshot:
- *    - User menu buttons: Stats / Withdraw / Referral Link (+ Admin Panel for admin)
- *    - Admin menu buttons: Add Coupon / Stock / Redeems / Change Points / Back
- *
- * ✅ INLINE BUTTONS are still used where REQUIRED:
- *    - Force join + Verify flow (URLs + callback_data)
- *    - Withdraw amount options (callback_data)
- *    - Admin amount pickers (callback_data)
- *
+ * ✅ BIG BOTTOM BUTTONS (Reply Keyboard)
+ * ✅ INLINE BUTTONS where needed
  * ✅ Force-Join channels supported: FORCE_JOIN_1 .. FORCE_JOIN_8
- *    (If you set only 2, it will show only 2)
  *
- * ✅ Withdrawal options: 500 / 1K / 2K / 4K
- * ✅ Each option uses dynamic points from withdraw_points table
- * ✅ Admin can change points per option
- * ✅ Admin can add coupons per amount (500/1K/2K/4K)
- * ✅ Withdraw takes coupon from stock by amount
+ * ✅ FIXED: Referral counting (was not counting because user was created before /start referral logic)
  *
  * REQUIRED ENV (Render):
  * BOT_TOKEN, ADMIN_ID, BOT_USERNAME (no @)
  * DB_HOST, DB_PORT(5432), DB_NAME(postgres), DB_USER, DB_PASS
- * FORCE_JOIN_1..FORCE_JOIN_8 (optional; set only what you want)
- *
- * REQUIRED DB:
- * - coupons must have: amount INT
- * - withdraw_points table
- * - device_links table
+ * FORCE_JOIN_1..FORCE_JOIN_8 (optional)
  */
 
 error_reporting(0);
@@ -250,6 +233,11 @@ function upsertUser($tg_id, $referred_by = null) {
   return getUser($tg_id);
 }
 
+function ensureUserExists($tg_id) {
+  // For non-/start messages: create user if missing WITHOUT referral
+  return upsertUser($tg_id, null);
+}
+
 function isVerifiedUser($tg_id) {
   $u = getUser($tg_id);
   return $u && !empty($u["verified"]);
@@ -396,8 +384,58 @@ if (isset($update["message"])) {
   $from_id = $m["from"]["id"];
   $text = trim($m["text"] ?? "");
 
-  // create user if missing (no ref here)
-  upsertUser($from_id, null);
+  // ---- /start with referral (✅ FIXED) ----
+  if (strpos($text, "/start") === 0) {
+
+    $parts = explode(" ", $text, 2);
+    $ref = null;
+    if (count($parts) === 2 && ctype_digit(trim($parts[1]))) {
+      $ref = (int)trim($parts[1]);
+    }
+
+    $u = getUser($from_id);
+
+    // ✅ only if user is truly NEW
+    if (!$u) {
+      $referred_by = null;
+
+      if ($ref && $ref != $from_id) {
+        $refUser = getUser($ref);
+        if ($refUser) {
+          $referred_by = $ref;
+
+          // ✅ increment referrer
+          try {
+            $pdo->prepare("
+              UPDATE users
+              SET points = COALESCE(points,0) + 1,
+                  total_referrals = COALESCE(total_referrals,0) + 1
+              WHERE tg_id = :r
+            ")->execute([":r" => $referred_by]);
+          } catch (Exception $e) {}
+        }
+      }
+
+      // ✅ create new user with referred_by set (or null)
+      try {
+        $pdo->prepare("INSERT INTO users (tg_id, referred_by) VALUES (:tg, :ref)")
+            ->execute([":tg" => $from_id, ":ref" => $referred_by]);
+      } catch (Exception $e) {}
+
+      $u = getUser($from_id);
+    }
+
+    if (isVerifiedUser($from_id)) {
+      sendMessage($chat_id, "🏠 <b>Main Menu</b>", userReplyKeyboard(isAdmin($from_id)));
+    } else {
+      sendMessage($chat_id, "✅ <b>Join all channels</b> then verify.\n\nAfter joining, press <b>Check Verification</b>.", joinMarkup());
+    }
+
+    http_response_code(200); echo "OK"; exit;
+  }
+
+  // For any non-/start message, ensure user exists (no referral here)
+  ensureUserExists($from_id);
 
   // ---- ADMIN STATES (text input) ----
   $state = getState($from_id);
@@ -439,39 +477,6 @@ if (isset($update["message"])) {
     http_response_code(200); echo "OK"; exit;
   }
 
-  // ---- /start with referral ----
-  if (strpos($text, "/start") === 0) {
-    $parts = explode(" ", $text, 2);
-    $ref = null;
-    if (count($parts) === 2 && ctype_digit(trim($parts[1]))) $ref = (int)trim($parts[1]);
-
-    $existing = getUser($from_id);
-
-    // If user is NEW, apply referral once
-    if (!$existing) {
-      $referred_by = null;
-      if ($ref && $ref != $from_id) {
-        $refUser = getUser($ref);
-        if ($refUser) $referred_by = $ref;
-      }
-      upsertUser($from_id, $referred_by);
-      if ($referred_by) {
-        try {
-          $pdo->prepare("UPDATE users SET points=points+1, total_referrals=total_referrals+1 WHERE tg_id=:r")
-              ->execute([":r" => $referred_by]);
-        } catch (Exception $e) {}
-      }
-    }
-
-    if (isVerifiedUser($from_id)) {
-      sendMessage($chat_id, "🏠 <b>Main Menu</b>", userReplyKeyboard(isAdmin($from_id)));
-    } else {
-      sendMessage($chat_id, "✅ <b>Join all channels</b> then verify.\n\nAfter joining, press <b>Check Verification</b>.", joinMarkup());
-    }
-
-    http_response_code(200); echo "OK"; exit;
-  }
-
   // ---- if not verified, always show join buttons ----
   if (!isVerifiedUser($from_id)) {
     sendMessage($chat_id, "✅ Join all channels then verify.\nPress <b>Check Verification</b>.", joinMarkup());
@@ -481,9 +486,11 @@ if (isset($update["message"])) {
   // ================= USER REPLY BUTTONS =================
   if ($text === "📊 Stats") {
     $u = getUser($from_id);
+    $points = (int)($u["points"] ?? 0);
+    $refs   = (int)($u["total_referrals"] ?? 0);
     sendMessage(
       $chat_id,
-      "📊 <b>Your Stats</b>\n\n⭐ Points: <b>{$u['points']}</b>\n👥 Referrals: <b>{$u['total_referrals']}</b>",
+      "📊 <b>Your Stats</b>\n\n⭐ Points: <b>{$points}</b>\n👥 Referrals: <b>{$refs}</b>",
       userReplyKeyboard(isAdmin($from_id))
     );
     http_response_code(200); echo "OK"; exit;
@@ -591,7 +598,8 @@ if (isset($update["callback_query"])) {
   // ACK fast (prevents webhook timeout)
   answerCallback($cq["id"], "…");
 
-  upsertUser($from_id, null);
+  // ensure user exists (no referral in callbacks)
+  ensureUserExists($from_id);
 
   // ---- Force join check ----
   if ($data === "check_join") {
@@ -637,13 +645,15 @@ if (isset($update["callback_query"])) {
     $need = getWithdrawPoints($amount);
     $u = getUser($from_id);
 
+    $uPoints = (int)($u["points"] ?? 0);
+
     if ($need <= 0) {
       sendMessage($chat_id, "⚠️ Points not set for {$amount}. Ask admin.", userReplyKeyboard(isAdmin($from_id)));
       http_response_code(200); echo "OK"; exit;
     }
 
-    if ((int)$u["points"] < $need) {
-      sendMessage($chat_id, "❌ Not enough points.\nYou have <b>{$u['points']}</b>, need <b>{$need}</b>.", userReplyKeyboard(isAdmin($from_id)));
+    if ($uPoints < $need) {
+      sendMessage($chat_id, "❌ Not enough points.\nYou have <b>{$uPoints}</b>, need <b>{$need}</b>.", userReplyKeyboard(isAdmin($from_id)));
       http_response_code(200); echo "OK"; exit;
     }
 
